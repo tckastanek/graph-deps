@@ -14,11 +14,11 @@ mod constants;
 
 use clap::{App, Arg};
 use constants::FILE_ARG;
-use petgraph::{Graph};
+use petgraph::{Graph, visit::EdgeRef};
 use serde_json::{Map, Value};
 use std::{borrow:: Cow, clone::Clone, io::Write, fs::File, path::Path};
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, PartialEq)]
 struct Package {
     name: String,
     version: String,
@@ -30,6 +30,15 @@ struct Package {
 type DepGraph<'a> = Graph<Package, &'a str>;
 
 impl Package {
+    fn new() -> Package {
+        Package {
+            name: String::new(),
+            version: String::new(),
+            dev_dependencies: Map::with_capacity(0),
+            dependencies: Map::with_capacity(0)
+        }
+    }
+    
     fn new_with_data(name: &str, version: &str) -> Package {
         Package {
             name: name.to_string(),
@@ -53,52 +62,69 @@ impl Package {
     }
 }
 
-type Nd = usize;
-type Ed = (usize, usize);
+type Nd<'a> = (usize, &'a str, &'a str);
+type Ed<'a> = (Nd<'a>, Nd<'a>, &'a str);
 #[derive(Debug)]
-struct Edges(Vec<Ed>);
+struct Edges<'a>(Vec<Ed<'a>>);
 
-impl<'a> dot::Labeller<'a, Nd, Ed> for Edges {
+impl<'a> dot::Labeller<'a, Nd<'a>, Ed<'a>> for Edges<'a> {
+    // TODO: add a way to set this with an arg
     fn graph_id(&'a self) -> dot::Id<'a> { dot::Id::new("package").unwrap() }
     
-    fn node_id(&'a self, n: &Nd) -> dot::Id<'a> {
-        dot::Id::new(format!("N{}", *n)).unwrap()
+    fn node_id(&'a self, n: &Nd<'a>) -> dot::Id<'a> {
+        dot::Id::new(format!("N{}", n.0)).unwrap()
+    }
+    
+    fn node_label<'b>(&'b self, n: &Nd<'b>) -> dot::LabelText<'b> {
+        dot::LabelText::LabelStr(Cow::Owned(format!("{}: {}", n.1.to_string(), n.2.to_string())))
+    }
+    
+    fn edge_label<'b>(&'b self, e: &Ed<'b>) -> dot::LabelText<'b> {
+        dot::LabelText::LabelStr(Cow::Owned(e.2.to_string()))
     }
 }
 
-impl<'a> dot::GraphWalk<'a, Nd, Ed> for Edges {
+// NOTE: not sure if there's a way to walk the actual graph because it's external
+impl<'a> dot::GraphWalk<'a, Nd<'a>, Ed<'a>> for Edges<'a> {
     fn nodes(&self) -> dot::Nodes<'a,Nd> {
         // (assumes that |N| \approxeq |E|)
         let &Edges(ref v) = self;
         let mut nodes = Vec::with_capacity(v.len());
-        for &(s,t) in v {
+        for &(s,t, _) in v {
             nodes.push(s); nodes.push(t);
         }
         nodes.sort();
         nodes.dedup();
         Cow::Owned(nodes)
     }
-    
-    fn edges(&'a self) -> dot::Edges<'a,Ed> {
+
+    fn edges(&'a self) -> dot::Edges<'a, Ed> {
         let &Edges(ref edges) = self;
         Cow::Borrowed(&edges[..])
     }
-    
-    fn source(&self, e: &Ed) -> Nd { e.0 }
-    
-    fn target(&self, e: &Ed) -> Nd { e.1 }
+
+    fn source(&self, e: &Ed<'a>) -> Nd<'a> { e.0 }
+
+    fn target(&self, e: &Ed<'a>) -> Nd<'a> { e.1 }
 }
 
-
-
 fn render_to<W: Write>(output: &mut W, graph: DepGraph) {
-    let (nodes, edges) = graph.into_nodes_edges();
-    
+//    let (nodes, edges) = graph.into_nodes_edges();
     let mut mapped_edges = Edges(Vec::new());
-    for edg in edges {
-        let ed: Ed = (edg.source().index(), edg.target().index());
+    for edg in graph.edge_references() {
+        // NOTE: This is probably dumb because it should always be the same. Consider holding this
+        // higher up and just doing a check.
+        let src_pkg = &graph[edg.source()];
+        let edg_src: Nd = (edg.source().index(), src_pkg.name.as_str(), src_pkg.version.as_str());
+    
+        let target_pkg = &graph[edg.target()];
+        let edg_target: Nd = (edg.target().index(), target_pkg.name.as_str(), target_pkg.version.as_str());
+        let edg_weight = *edg.weight();
+        let ed: Ed = (edg_src, edg_target, edg_weight);
+
         mapped_edges.0.push(ed);
     }
+
     dot::render(&mapped_edges, output).unwrap()
 }
 
