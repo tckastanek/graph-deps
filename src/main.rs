@@ -13,10 +13,10 @@ extern crate serde_json;
 mod constants;
 
 use clap::{App, Arg};
-use constants::FILE_ARG;
-use petgraph::{Graph, visit::EdgeRef};
+use constants::{FILE_ARG, VERSION_LEVEL};
+use petgraph::{Graph, graph::NodeIndex, visit::EdgeRef};
 use serde_json::{Map, Value};
-use std::{borrow:: Cow, clone::Clone, io::Write, fs::File, path::Path};
+use std::{borrow:: Cow, clone::Clone, collections::HashMap, io::Write, fs::File, path::Path};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 struct Package {
@@ -48,15 +48,16 @@ impl Package {
         }
     }
     
-    // figure out how to do this without consuming self?
-    fn graph_deps<'a>(self, graph: &mut DepGraph) -> () {
+    // TODO: figure out how to do this without consuming self?
+    // TODO: Figure out how to hold dep versions under a single name key
+    fn graph_deps(&self, graph: &mut DepGraph, v_level: &str, pkg_versions: &mut HashMap<String, NodeIndex>) -> () {
         let root = graph.add_node(self.clone());
         for entry in self.dependencies.iter() {
             let (name, version) = entry;
-            
             // if unwrap fails then package is invalid
             let package = Package::new_with_data(&name, version.as_str().unwrap());
             let pkg = graph.add_node(package);
+            pkg_versions.insert(name.to_string(), pkg.clone());
             graph.add_edge(root, pkg, "dependency");
         }
     }
@@ -109,7 +110,6 @@ impl<'a> dot::GraphWalk<'a, Nd<'a>, Ed<'a>> for Edges<'a> {
 }
 
 fn render_to<W: Write>(output: &mut W, graph: DepGraph) {
-//    let (nodes, edges) = graph.into_nodes_edges();
     let mut mapped_edges = Edges(Vec::new());
     for edg in graph.edge_references() {
         // NOTE: This is probably dumb because it should always be the same. Consider holding this
@@ -128,7 +128,6 @@ fn render_to<W: Write>(output: &mut W, graph: DepGraph) {
     dot::render(&mapped_edges, output).unwrap()
 }
 
-
 fn main() {
     let matches = App::new("Graph Deps")
         .version(crate_version!())
@@ -138,11 +137,24 @@ fn main() {
             .help("file path")
             .multiple(true)
             .value_name("FILE"))
+        .arg(Arg::with_name(VERSION_LEVEL)
+            .help("version level")
+            .long("version-level")
+            .short("l")
+            .requires(FILE_ARG)
+            .takes_value(true)
+            .default_value("name")
+            // TODO: use an enum when that lands in clap
+            .possible_values(&["name", "major", "minor", "patch"]))
         .get_matches();
     
     
     if matches.is_present(FILE_ARG) {
         let mut deps = DepGraph::new();
+        // TODO: figure out if this is best way to dedupe graph elements
+        let mut pkg_versions = HashMap::new();
+        let v_level = matches.value_of(VERSION_LEVEL).unwrap();
+        println!("{}", v_level);
         for arg in matches.values_of(FILE_ARG).unwrap() {
             let file_path = Path::new(arg);
             
@@ -151,15 +163,14 @@ fn main() {
                 Err(_) => println!("BAD PATH"),
                 Ok(mut file) => {
                     let p: Package = serde_json::from_reader(file).unwrap();
-                    p.graph_deps(&mut deps);
+                    p.graph_deps(&mut deps, v_level, &mut pkg_versions);
                 }
             }
         }
         let out_path = Path::new("graph.dot");
         let mut out_file = File::create(out_path).unwrap();
-        
+        println!("{:#?}", pkg_versions);
 
-        render_to(&mut out_file, deps);
-//        println!("{:?}", &dot_file);
+//        render_to(&mut out_file, deps);
     }
 }
