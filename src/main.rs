@@ -57,7 +57,15 @@ impl Package {
             // if unwrap fails then package is invalid
             let package = Package::new_with_data(&name, version.as_str().unwrap());
             let pkg = graph.add_node(package);
-            pkg_versions.insert(name.to_string(), pkg.clone());
+            
+            let string_name = name.to_string();
+            if pkg_versions.contains_key(&string_name) {
+                if let Some(node) = pkg_versions.get(&string_name) {
+                    graph.add_edge(root, *node, "dependency");
+                }
+            }
+            
+            pkg_versions.insert(string_name, pkg.clone());
             graph.add_edge(root, pkg, "dependency");
         }
     }
@@ -169,8 +177,8 @@ fn main() {
         }
         let out_path = Path::new("graph.dot");
         let mut out_file = File::create(out_path).unwrap();
-        println!("{:#?}", pkg_versions);
+//        println!("{:#?}", pkg_versions);
 
-//        render_to(&mut out_file, deps);
+        render_to(&mut out_file, deps);
     }
 }
